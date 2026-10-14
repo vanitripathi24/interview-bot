@@ -38,7 +38,7 @@ export default function FaceVerify() {
         {result && result.match && <p className="text-green-600 text-sm font-medium">Verified — starting your interview...</p>}
         {result && !result.match && (
           <p className="text-red-500 text-sm">
-            Face didn't match our records (distance: {result.distance}). Make sure you're well-lit and try again.
+            Face didn't match our records (similarity: {result.similarity}%). Make sure you're well-lit and try again.
           </p>
         )}
         {error && <p className="text-red-500 text-sm">{error}</p>}

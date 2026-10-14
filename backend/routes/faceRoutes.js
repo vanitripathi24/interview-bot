@@ -4,15 +4,27 @@ const { requireAuth } = require("../middleware/auth");
 
 const router = express.Router();
 
-function euclideanDistance(a, b) {
+const DESCRIPTOR_LENGTH = 1024;
+
+// Mirrors @vladmandic/human's match.ts similarity calculation (the
+// frontend's face library) so a stored embedding can be compared here
+// without pulling the whole model stack into the backend.
+const MINKOWSKI_ORDER = 2;
+const DISTANCE_MULTIPLIER = 25;
+const SIMILARITY_MIN = 0.2;
+const SIMILARITY_MAX = 0.8;
+const MATCH_THRESHOLD = 0.5;
+
+function similarity(a, b) {
   let sum = 0;
   for (let i = 0; i < a.length; i++) {
-    sum += (a[i] - b[i]) ** 2;
+    sum += Math.abs(a[i] - b[i]) ** MINKOWSKI_ORDER;
   }
-  return Math.sqrt(sum);
+  const distance = Math.round(100 * DISTANCE_MULTIPLIER * sum) / 100;
+  const root = distance ** (1 / MINKOWSKI_ORDER);
+  const normalized = (1 - root / 100 - SIMILARITY_MIN) / (SIMILARITY_MAX - SIMILARITY_MIN);
+  return Math.max(Math.min(normalized, 1), 0);
 }
-
-const MATCH_THRESHOLD = 0.6;
 
 router.post("/register", requireAuth, async (req, res) => {
   try {
@@ -21,8 +33,8 @@ router.post("/register", requireAuth, async (req, res) => {
     if (!consent) {
       return res.status(400).json({ message: "Explicit consent is required before storing biometric data." });
     }
-    if (!Array.isArray(descriptor) || descriptor.length !== 128) {
-      return res.status(400).json({ message: "A valid 128-length face descriptor is required." });
+    if (!Array.isArray(descriptor) || descriptor.length !== DESCRIPTOR_LENGTH) {
+      return res.status(400).json({ message: `A valid ${DESCRIPTOR_LENGTH}-length face descriptor is required.` });
     }
 
     await User.findByIdAndUpdate(req.user.id, {
@@ -40,8 +52,8 @@ router.post("/register", requireAuth, async (req, res) => {
 router.post("/verify", requireAuth, async (req, res) => {
   try {
     const { descriptor } = req.body;
-    if (!Array.isArray(descriptor) || descriptor.length !== 128) {
-      return res.status(400).json({ message: "A valid 128-length face descriptor is required." });
+    if (!Array.isArray(descriptor) || descriptor.length !== DESCRIPTOR_LENGTH) {
+      return res.status(400).json({ message: `A valid ${DESCRIPTOR_LENGTH}-length face descriptor is required.` });
     }
 
     const user = await User.findById(req.user.id).select("+faceDescriptor");
@@ -49,10 +61,10 @@ router.post("/verify", requireAuth, async (req, res) => {
       return res.status(404).json({ message: "No registered face found for this account. Please register first." });
     }
 
-    const distance = euclideanDistance(descriptor, user.faceDescriptor);
-    const isMatch = distance < MATCH_THRESHOLD;
+    const score = similarity(descriptor, user.faceDescriptor);
+    const isMatch = score >= MATCH_THRESHOLD;
 
-    res.json({ match: isMatch, distance: Number(distance.toFixed(3)) });
+    res.json({ match: isMatch, similarity: Number((score * 100).toFixed(1)) });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }

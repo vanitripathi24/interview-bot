@@ -22,7 +22,7 @@ and both a static curated question bank and dynamic AI-generated questions
 - **Answer timer** — configurable per-question countdown with auto-submit
 - **Speech-to-text & read-aloud** — browser-native, free, no API key
 - **Biometric face-lock with liveness detection** — one-time registration
-  (consent required, only a 128-number descriptor stored, never a photo);
+  (consent required, only a 1024-number descriptor stored, never a photo);
   requires a detected blink before allowing capture, so a static photo or a
   phone held up to the camera can't be used to spoof it
 - **Live proctoring with periodic identity re-verification** — checks face

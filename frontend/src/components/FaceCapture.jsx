@@ -1,6 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import * as faceapi from "face-api.js";
-import { loadFaceModels } from "../utils/faceModels";
+import { getHuman, loadFaceModels } from "../utils/faceModels";
 
 const LIVENESS_CHECK_INTERVAL_MS = 200;
 const REQUIRED_BLINKS = 1;
@@ -10,18 +9,25 @@ const REQUIRED_BLINKS = 1;
 const EAR_CLOSED_THRESHOLD = 0.23;
 const EAR_OPEN_THRESHOLD = 0.27;
 
-// Distance between two landmark points.
+// 6-point eye contour (outer corner, 2 upper-lid, inner corner, 2 lower-lid)
+// into Human's 468-point face mesh — the standard subset used for
+// eye-aspect-ratio blink detection on this mesh topology.
+const LEFT_EYE = [33, 160, 158, 133, 153, 144];
+const RIGHT_EYE = [362, 385, 387, 263, 373, 380];
+
+// Distance between two mesh points ([x, y, z?]).
 function dist(a, b) {
-  return Math.hypot(a.x - b.x, a.y - b.y);
+  return Math.hypot(a[0] - b[0], a[1] - b[1]);
 }
 
 // Standard eye-aspect-ratio formula from a 6-point eye landmark set.
 // Lower value = eye more closed. A static photo's EAR never changes frame
 // to frame, which is exactly what this is designed to catch.
-function eyeAspectRatio(eye) {
-  const vertical1 = dist(eye[1], eye[5]);
-  const vertical2 = dist(eye[2], eye[4]);
-  const horizontal = dist(eye[0], eye[3]);
+function eyeAspectRatio(mesh, indices) {
+  const [p0, p1, p2, p3, p4, p5] = indices.map((i) => mesh[i]);
+  const vertical1 = dist(p1, p5);
+  const vertical2 = dist(p2, p4);
+  const horizontal = dist(p0, p3);
   return (vertical1 + vertical2) / (2 * horizontal);
 }
 
@@ -32,7 +38,7 @@ function eyeAspectRatio(eye) {
  * register or verify a face, since a static image can never blink.
  *
  * Props:
- *   onCapture(descriptor: number[]) - called with the extracted descriptor
+ *   onCapture(embedding: number[]) - called with the extracted face embedding
  *   buttonLabel: string
  */
 export default function FaceCapture({ onCapture, buttonLabel = "Capture Face" }) {
@@ -42,6 +48,12 @@ export default function FaceCapture({ onCapture, buttonLabel = "Capture Face" })
   const [blinkCount, setBlinkCount] = useState(0);
   const eyesClosedRef = useRef(false);
   const livenessPassedRef = useRef(false);
+  // Guards against overlapping detect() calls: if one check is still
+  // running when the next interval tick fires, skip that tick instead of
+  // starting a second detection in parallel. Without this, a detector
+  // slower than the poll interval causes calls to pile up faster than
+  // they resolve, and liveness can take minutes instead of seconds.
+  const detectingRef = useRef(false);
 
   useEffect(() => {
     let stream;
@@ -65,31 +77,36 @@ export default function FaceCapture({ onCapture, buttonLabel = "Capture Face" })
     }
 
     async function checkForBlink() {
-      if (!videoRef.current || livenessPassedRef.current) return;
-
-      const detection = await faceapi
-        .detectSingleFace(videoRef.current, new faceapi.TinyFaceDetectorOptions())
-        .withFaceLandmarks();
-
-      if (!detection) return; // no face this frame — just wait for the next one
-
-      const leftEAR = eyeAspectRatio(detection.landmarks.getLeftEye());
-      const rightEAR = eyeAspectRatio(detection.landmarks.getRightEye());
-      const avgEAR = (leftEAR + rightEAR) / 2;
-
-      if (avgEAR < EAR_CLOSED_THRESHOLD) {
-        eyesClosedRef.current = true;
-      } else if (avgEAR > EAR_OPEN_THRESHOLD && eyesClosedRef.current) {
-        // Eyes just went from closed to open — that's one completed blink.
-        eyesClosedRef.current = false;
-        setBlinkCount((prev) => {
-          const next = prev + 1;
-          if (next >= REQUIRED_BLINKS) {
-            livenessPassedRef.current = true;
-            clearInterval(livenessIntervalId);
-          }
-          return next;
+      if (!videoRef.current || livenessPassedRef.current || detectingRef.current) return;
+      detectingRef.current = true;
+      try {
+        const human = getHuman();
+        const result = await human.detect(videoRef.current, {
+          face: { description: { enabled: false } },
         });
+        const face = result.face[0];
+        if (!face) return; // no face this frame — just wait for the next one
+
+        const leftEAR = eyeAspectRatio(face.mesh, LEFT_EYE);
+        const rightEAR = eyeAspectRatio(face.mesh, RIGHT_EYE);
+        const avgEAR = (leftEAR + rightEAR) / 2;
+
+        if (avgEAR < EAR_CLOSED_THRESHOLD) {
+          eyesClosedRef.current = true;
+        } else if (avgEAR > EAR_OPEN_THRESHOLD && eyesClosedRef.current) {
+          // Eyes just went from closed to open — that's one completed blink.
+          eyesClosedRef.current = false;
+          setBlinkCount((prev) => {
+            const next = prev + 1;
+            if (next >= REQUIRED_BLINKS) {
+              livenessPassedRef.current = true;
+              clearInterval(livenessIntervalId);
+            }
+            return next;
+          });
+        }
+      } finally {
+        detectingRef.current = false;
       }
     }
 
@@ -106,19 +123,20 @@ export default function FaceCapture({ onCapture, buttonLabel = "Capture Face" })
     setStatus("capturing");
     setError("");
     try {
-      const detection = await faceapi
-        .detectSingleFace(videoRef.current, new faceapi.TinyFaceDetectorOptions())
-        .withFaceLandmarks()
-        .withFaceDescriptor();
+      const human = getHuman();
+      const result = await human.detect(videoRef.current, {
+        face: { detector: { rotation: true }, description: { enabled: true } },
+      });
+      const face = result.face[0];
 
-      if (!detection) {
+      if (!face || !face.embedding) {
         setStatus("no-face");
         setError("No face detected. Make sure your face is clearly visible and well-lit, then try again.");
         return;
       }
 
       setStatus("watching");
-      onCapture(Array.from(detection.descriptor));
+      onCapture(face.embedding);
     } catch (err) {
       setError(err.message || "Something went wrong capturing your face.");
       setStatus("error");

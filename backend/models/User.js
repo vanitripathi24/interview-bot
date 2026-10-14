@@ -7,10 +7,10 @@ const UserSchema = new mongoose.Schema(
     password: { type: String }, // hashed, absent for guests
     role: { type: String, enum: ["candidate", "admin"], default: "candidate" },
     isGuest: { type: Boolean, default: false },
-    // Biometric fields — see faceRoutes.js. We store ONLY a 128-length numeric
-    // face descriptor (a mathematical "signature" produced by face-api.js),
-    // never the actual photo/image. This descriptor cannot be reversed back
-    // into a picture of the person's face.
+    // Biometric fields — see faceRoutes.js. We store ONLY a 1024-length numeric
+    // face embedding (a mathematical "signature" produced by @vladmandic/human's
+    // recognition model), never the actual photo/image. This embedding cannot
+    // be reversed back into a picture of the person's face.
     faceDescriptor: { type: [Number], default: undefined, select: false },
     faceConsentGiven: { type: Boolean, default: false },
     faceConsentAt: { type: Date },

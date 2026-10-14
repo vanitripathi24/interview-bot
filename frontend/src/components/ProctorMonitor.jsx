@@ -1,6 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import * as faceapi from "face-api.js";
-import { loadFaceModels } from "../utils/faceModels";
+import { getHuman, loadFaceModels } from "../utils/faceModels";
 import api from "../api/api";
 
 const CHECK_INTERVAL_MS = 8000; // how often to check the frame
@@ -10,6 +9,10 @@ const WARNING_THRESHOLD = 4; // more than this many warnings -> flagged
 // candidate handing off to someone else mid-interview after passing the
 // initial face-lock check.
 const REVERIFY_EVERY_N_TICKS = 6;
+// How many faces the detector should report at once. Default is 1 (tuned
+// for single-face use cases like face-lock) which would silently prevent
+// "multiple faces" from ever being detected here.
+const MAX_FACES_TO_DETECT = 5;
 
 /**
  * Runs in the background during an interview: keeps its own tiny camera
@@ -31,6 +34,9 @@ export default function ProctorMonitor({ interviewId, onFlagged }) {
   const [ready, setReady] = useState(false);
   const flaggedRef = useRef(false);
   const tickCountRef = useRef(0);
+  // Guards against overlapping detect() calls piling up if one check is
+  // still running when the next interval tick fires.
+  const detectingRef = useRef(false);
 
   // onFlagged is a fresh function reference on every parent re-render (e.g.
   // every keystroke while typing an answer). Storing it in a ref — rather
@@ -81,42 +87,53 @@ export default function ProctorMonitor({ interviewId, onFlagged }) {
     }
 
     async function checkFrame() {
-      if (!videoRef.current) return;
+      if (!videoRef.current || detectingRef.current) return;
+      detectingRef.current = true;
       tickCountRef.current += 1;
 
-      const detections = await faceapi.detectAllFaces(videoRef.current, new faceapi.TinyFaceDetectorOptions());
+      try {
+        // On most ticks we only need a face count, so mesh/description stay
+        // off for speed. Every REVERIFY_EVERY_N_TICKS we also need the
+        // recognition embedding to confirm it's still the same person.
+        const isReverifyTick = tickCountRef.current % REVERIFY_EVERY_N_TICKS === 0;
+        const human = getHuman();
+        const result = await human.detect(videoRef.current, {
+          face: {
+            detector: { maxDetected: MAX_FACES_TO_DETECT, rotation: isReverifyTick },
+            mesh: { enabled: isReverifyTick },
+            description: { enabled: isReverifyTick },
+          },
+        });
 
-      if (detections.length === 0) {
-        await logWarning("no_face");
-        return;
-      }
-      if (detections.length > 1) {
-        await logWarning("multiple_faces");
-        return;
-      }
-
-      // Exactly one face present — on the periodic interval, also confirm
-      // it's still the SAME person who registered/verified at the start.
-      if (tickCountRef.current % REVERIFY_EVERY_N_TICKS === 0) {
-        try {
-          const identityCheck = await faceapi
-            .detectSingleFace(videoRef.current, new faceapi.TinyFaceDetectorOptions())
-            .withFaceLandmarks()
-            .withFaceDescriptor();
-
-          if (identityCheck) {
-            const { data } = await api.post("/face/verify", {
-              descriptor: Array.from(identityCheck.descriptor),
-            });
-            if (!data.match) {
-              await logWarning("identity_mismatch");
-            }
-          }
-        } catch (err) {
-          // A missing registered face (404) or a transient error here
-          // shouldn't interrupt the interview — just skip this check.
-          console.error("Periodic identity re-verification failed:", err.message);
+        const faceCount = result.face.length;
+        if (faceCount === 0) {
+          await logWarning("no_face");
+          return;
         }
+        if (faceCount > 1) {
+          await logWarning("multiple_faces");
+          return;
+        }
+
+        // Exactly one face present — on the periodic interval, also confirm
+        // it's still the SAME person who registered/verified at the start.
+        if (isReverifyTick) {
+          try {
+            const embedding = result.face[0]?.embedding;
+            if (embedding) {
+              const { data } = await api.post("/face/verify", { descriptor: embedding });
+              if (!data.match) {
+                await logWarning("identity_mismatch");
+              }
+            }
+          } catch (err) {
+            // A missing registered face (404) or a transient error here
+            // shouldn't interrupt the interview — just skip this check.
+            console.error("Periodic identity re-verification failed:", err.message);
+          }
+        }
+      } finally {
+        detectingRef.current = false;
       }
     }
 
