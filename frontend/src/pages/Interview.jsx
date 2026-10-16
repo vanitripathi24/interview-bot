@@ -4,12 +4,16 @@ import api from "../api/api";
 import ProctorMonitor from "../components/ProctorMonitor";
 import useExamIntegrity from "../hooks/useExamIntegrity";
 
-const INTEGRITY_WARNING_LABEL = {
+const WARNING_LABEL = {
+  no_face: "No face detected",
+  multiple_faces: "Multiple faces detected",
+  identity_mismatch: "Face didn't match registration",
   fullscreen_exit: "Fullscreen exited",
   tab_switch: "Tab/window switch detected",
   copy_paste: "Copy/paste is disabled during the interview",
   right_click: "Right-click is disabled during the interview",
 };
+const WARNING_THRESHOLD = 4; // more than this many warnings -> flagged (mirrors the backend)
 const INTEGRITY_TOAST_DURATION_MS = 4000;
 
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -33,18 +37,27 @@ export default function Interview() {
   const recognitionRef = useRef(null);
   const autoSubmittedRef = useRef(false);
   const [integrityToast, setIntegrityToast] = useState(null);
-  const { isFullscreen, lastWarning, requestFullscreen } = useExamIntegrity(
-    id,
-    () => setProctorFlagged(true),
-    !finished
-  );
+  const [proctorError, setProctorError] = useState(null);
+  // One combined counter for ALL warning types (face presence/identity +
+  // fullscreen/tab/clipboard) since the backend already tracks them as a
+  // single array/threshold — surfaced here prominently instead of being
+  // split across a tiny corner widget and an easy-to-miss toast.
+  const [warningsCount, setWarningsCount] = useState(0);
+  const [lastWarningType, setLastWarningType] = useState(null);
+
+  const handleWarning = (type, count) => {
+    setWarningsCount(count);
+    setLastWarningType(type);
+    setIntegrityToast(type);
+  };
+
+  const { isFullscreen, requestFullscreen } = useExamIntegrity(id, () => setProctorFlagged(true), !finished, handleWarning);
 
   useEffect(() => {
-    if (!lastWarning) return;
-    setIntegrityToast(lastWarning.type);
+    if (!integrityToast) return;
     const t = setTimeout(() => setIntegrityToast(null), INTEGRITY_TOAST_DURATION_MS);
     return () => clearTimeout(t);
-  }, [lastWarning]);
+  }, [integrityToast]);
 
   useEffect(() => {
     api.get(`/interviews/${id}`).then(({ data }) => setTimePerQuestion(data.timePerQuestion || 0));
@@ -241,12 +254,35 @@ export default function Interview() {
     <div className="min-h-screen bg-slate-50 p-6">
       {integrityToast && (
         <div className="fixed top-4 right-4 bg-amber-50 border border-amber-300 text-amber-800 text-sm rounded-lg shadow-md px-4 py-2 z-50">
-          ⚠ {INTEGRITY_WARNING_LABEL[integrityToast] || "Integrity warning logged"}
+          ⚠ {WARNING_LABEL[integrityToast] || "Integrity warning logged"}
         </div>
       )}
 
       <div className="max-w-2xl mx-auto space-y-4">
-        <h1 className="text-xl font-semibold">Interview in progress</h1>
+        <div className="flex items-center justify-between">
+          <h1 className="text-xl font-semibold">Interview in progress</h1>
+          <div
+            className={`text-sm font-semibold rounded-full px-3 py-1 ${
+              warningsCount === 0
+                ? "bg-slate-100 text-slate-500"
+                : warningsCount > WARNING_THRESHOLD
+                ? "bg-red-100 text-red-700"
+                : "bg-amber-100 text-amber-700"
+            }`}
+          >
+            Integrity: {warningsCount}/{WARNING_THRESHOLD + 1}
+          </div>
+        </div>
+
+        {warningsCount > 0 && (
+          <p className="text-sm text-slate-500 -mt-2">Last warning: {WARNING_LABEL[lastWarningType] || lastWarningType}</p>
+        )}
+
+        {proctorError && (
+          <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm text-amber-700">
+            ⚠ Proctoring couldn't start ({proctorError}) — face-presence checks are not running for this session.
+          </div>
+        )}
 
         {proctorFlagged && (
           <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700">
@@ -360,7 +396,12 @@ export default function Interview() {
         )}
       </div>
 
-      <ProctorMonitor interviewId={id} onFlagged={() => setProctorFlagged(true)} />
+      <ProctorMonitor
+        interviewId={id}
+        onFlagged={() => setProctorFlagged(true)}
+        onWarning={handleWarning}
+        onError={setProctorError}
+      />
     </div>
   );
 }

@@ -19,7 +19,7 @@ const DUPLICATE_WARNING_WINDOW_MS = 1000; // visibilitychange + blur often fire 
  */
 const FULLSCREEN_SUPPORTED = typeof document !== "undefined" && !!document.documentElement.requestFullscreen;
 
-export default function useExamIntegrity(interviewId, onFlagged, enabled = true) {
+export default function useExamIntegrity(interviewId, onFlagged, enabled = true, onWarning) {
   // If the browser doesn't support the Fullscreen API at all (older Safari,
   // some embedded/iframe contexts), there's nothing to enforce — treat it as
   // satisfied rather than permanently blocking the candidate behind a gate
@@ -33,6 +33,10 @@ export default function useExamIntegrity(interviewId, onFlagged, enabled = true)
   useEffect(() => {
     onFlaggedRef.current = onFlagged;
   }, [onFlagged]);
+  const onWarningRef = useRef(onWarning);
+  useEffect(() => {
+    onWarningRef.current = onWarning;
+  }, [onWarning]);
 
   const logWarning = useCallback(
     async (type) => {
@@ -44,6 +48,7 @@ export default function useExamIntegrity(interviewId, onFlagged, enabled = true)
 
       try {
         const { data } = await api.post(`/interviews/${interviewId}/warning`, { type });
+        onWarningRef.current?.(type, data.warningsCount);
         if (data.flagged && !flaggedRef.current) {
           flaggedRef.current = true;
           onFlaggedRef.current?.();

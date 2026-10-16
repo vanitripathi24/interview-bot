@@ -26,12 +26,15 @@ const MAX_FACES_TO_DETECT = 5;
  * Props:
  *   interviewId: string
  *   onFlagged(): called once, the moment warningsCount exceeds the threshold
+ *   onWarning(type, count): called after every successfully logged warning
+ *   onError(message): called once if the camera/models fail to initialize at all
  */
-export default function ProctorMonitor({ interviewId, onFlagged }) {
+export default function ProctorMonitor({ interviewId, onFlagged, onWarning, onError }) {
   const videoRef = useRef(null);
   const [warningsCount, setWarningsCount] = useState(0);
   const [lastWarning, setLastWarning] = useState(null);
   const [ready, setReady] = useState(false);
+  const [cameraError, setCameraError] = useState(null);
   const flaggedRef = useRef(false);
   const tickCountRef = useRef(0);
   // Guards against overlapping detect() calls piling up if one check is
@@ -48,6 +51,14 @@ export default function ProctorMonitor({ interviewId, onFlagged }) {
   useEffect(() => {
     onFlaggedRef.current = onFlagged;
   }, [onFlagged]);
+  const onWarningRef = useRef(onWarning);
+  useEffect(() => {
+    onWarningRef.current = onWarning;
+  }, [onWarning]);
+  const onErrorRef = useRef(onError);
+  useEffect(() => {
+    onErrorRef.current = onError;
+  }, [onError]);
 
   useEffect(() => {
     let stream;
@@ -59,6 +70,7 @@ export default function ProctorMonitor({ interviewId, onFlagged }) {
         const { data } = await api.post(`/interviews/${interviewId}/warning`, { type });
         setWarningsCount(data.warningsCount);
         setLastWarning(type);
+        onWarningRef.current?.(type, data.warningsCount);
 
         if (data.flagged && !flaggedRef.current) {
           flaggedRef.current = true;
@@ -79,10 +91,14 @@ export default function ProctorMonitor({ interviewId, onFlagged }) {
 
         intervalId = setInterval(checkFrame, CHECK_INTERVAL_MS);
       } catch (err) {
-        // If camera access fails here, we simply don't proctor rather than
-        // blocking the interview — the candidate already granted camera
-        // access once for face-lock, so this is a rare edge case.
+        // If camera access or model loading fails here, we don't block the
+        // interview — but we DO surface it visibly, otherwise proctoring
+        // silently does nothing and no warning ever fires even though the
+        // candidate could be doing anything off-camera.
         console.error("Proctoring camera unavailable:", err.message);
+        const message = err.message || "Camera or face-detection models failed to load.";
+        setCameraError(message);
+        onErrorRef.current?.(message);
       }
     }
 
@@ -156,7 +172,9 @@ export default function ProctorMonitor({ interviewId, onFlagged }) {
     <div className="fixed bottom-4 right-4 w-40 bg-white rounded-lg shadow-lg border overflow-hidden z-50">
       <video ref={videoRef} autoPlay muted playsInline className="w-full aspect-video object-cover bg-black" />
       <div className="p-2 text-xs">
-        <p className="text-slate-400">{ready ? "Proctoring active" : "Starting camera..."}</p>
+        <p className={cameraError ? "text-red-600 font-medium" : "text-slate-400"}>
+          {cameraError ? "⚠ Proctoring unavailable" : ready ? "Proctoring active" : "Starting camera..."}
+        </p>
         {warningsCount > 0 && (
           <p className={`font-medium ${warningsCount > WARNING_THRESHOLD ? "text-red-600" : "text-amber-600"}`}>
             Warning {warningsCount}/{WARNING_THRESHOLD + 1}
