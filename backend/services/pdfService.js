@@ -53,7 +53,7 @@ function streamReportPDF(res, data) {
     doc.moveDown();
     doc.fontSize(16).fillColor("red").text("⚠ Proctoring Flag", { underline: true });
     doc.fontSize(12).fillColor("black").text(
-      `This session was flagged during proctoring (${report.proctoringWarningsCount} warning(s) logged — no face, multiple faces, or an identity mismatch detected).`
+      `This session was flagged during proctoring (${report.proctoringWarningsCount} warning(s) logged — face presence/identity checks and/or exam-integrity checks such as fullscreen exits, tab switches, copy/paste, or right-click attempts).`
     );
   }
 

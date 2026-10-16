@@ -9,7 +9,15 @@ const WARNING_THRESHOLD = 4;
 router.post("/:id/warning", requireAuth, async (req, res) => {
   try {
     const { type } = req.body;
-    const validTypes = ["no_face", "multiple_faces", "identity_mismatch"];
+    const validTypes = [
+      "no_face",
+      "multiple_faces",
+      "identity_mismatch",
+      "fullscreen_exit",
+      "tab_switch",
+      "copy_paste",
+      "right_click",
+    ];
     if (!validTypes.includes(type)) {
       return res.status(400).json({ message: `type must be one of: ${validTypes.join(", ")}` });
     }

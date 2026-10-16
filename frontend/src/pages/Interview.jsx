@@ -2,6 +2,15 @@ import React, { useEffect, useRef, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import api from "../api/api";
 import ProctorMonitor from "../components/ProctorMonitor";
+import useExamIntegrity from "../hooks/useExamIntegrity";
+
+const INTEGRITY_WARNING_LABEL = {
+  fullscreen_exit: "Fullscreen exited",
+  tab_switch: "Tab/window switch detected",
+  copy_paste: "Copy/paste is disabled during the interview",
+  right_click: "Right-click is disabled during the interview",
+};
+const INTEGRITY_TOAST_DURATION_MS = 4000;
 
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 
@@ -23,6 +32,19 @@ export default function Interview() {
   const [timeLeft, setTimeLeft] = useState(null);
   const recognitionRef = useRef(null);
   const autoSubmittedRef = useRef(false);
+  const [integrityToast, setIntegrityToast] = useState(null);
+  const { isFullscreen, lastWarning, requestFullscreen } = useExamIntegrity(
+    id,
+    () => setProctorFlagged(true),
+    !finished
+  );
+
+  useEffect(() => {
+    if (!lastWarning) return;
+    setIntegrityToast(lastWarning.type);
+    const t = setTimeout(() => setIntegrityToast(null), INTEGRITY_TOAST_DURATION_MS);
+    return () => clearTimeout(t);
+  }, [lastWarning]);
 
   useEffect(() => {
     api.get(`/interviews/${id}`).then(({ data }) => setTimePerQuestion(data.timePerQuestion || 0));
@@ -193,10 +215,36 @@ export default function Interview() {
     );
   }
 
+  if (!isFullscreen) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50 p-6">
+        <div className="bg-white rounded-xl shadow-md p-8 max-w-md text-center space-y-4">
+          <h1 className="text-xl font-semibold">Fullscreen required</h1>
+          <p className="text-sm text-slate-500">
+            This interview must be taken in fullscreen. Exiting fullscreen, switching tabs/windows, and copy/paste
+            are all logged and may flag your session for reviewer attention.
+          </p>
+          <button
+            onClick={requestFullscreen}
+            className="bg-slate-900 text-white rounded-lg px-6 py-2 font-medium"
+          >
+            Enter Fullscreen &amp; Continue
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   const isCodeQuestion = question?.category?.toLowerCase().includes("dsa");
 
   return (
     <div className="min-h-screen bg-slate-50 p-6">
+      {integrityToast && (
+        <div className="fixed top-4 right-4 bg-amber-50 border border-amber-300 text-amber-800 text-sm rounded-lg shadow-md px-4 py-2 z-50">
+          ⚠ {INTEGRITY_WARNING_LABEL[integrityToast] || "Integrity warning logged"}
+        </div>
+      )}
+
       <div className="max-w-2xl mx-auto space-y-4">
         <h1 className="text-xl font-semibold">Interview in progress</h1>
 

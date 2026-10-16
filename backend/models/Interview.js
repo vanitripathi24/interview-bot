@@ -41,7 +41,18 @@ const InterviewSchema = new mongoose.Schema(
     currentQuestionIndex: { type: Number, default: 0 },
     proctoringWarnings: [
       {
-        type: { type: String, enum: ["no_face", "multiple_faces", "identity_mismatch"] },
+        type: {
+          type: String,
+          enum: [
+            "no_face",
+            "multiple_faces",
+            "identity_mismatch",
+            "fullscreen_exit",
+            "tab_switch",
+            "copy_paste",
+            "right_click",
+          ],
+        },
         timestamp: { type: Date, default: Date.now },
       },
     ],
